@@ -1,0 +1,76 @@
+#!/usr/bin/ruby
+#
+# sqs-hipchat - a simple script that takes cloudformations events off an 
+#   sqs queue and publishes them to a hipchat room
+# author:: ann wallace
+# license:: if you want to steal this hacky code - go for it
+#
+# TODO : break this up more and let the user define what messages go to hipchat
+
+require 'rubygems'
+require 'aws-sdk-v1'
+require 'pp'
+require 'hipchat'
+require 'optparse'
+
+AWS.config(
+  :access_key_id => '',
+  :secret_access_key =>'',
+  :region => 'us-west-2')
+
+
+options = {}
+OptionParser.new do |opts|
+	# default options
+	options[:queue] = 'CloudFormationEvents'
+	options[:api] = 'XXXXXX'
+	options[:room] = "free beer"
+
+	opts.banner = "Usage: sqs-hipchat [OPTIONS]"
+
+	opts.on('-h', '--help', 'help yo!') do
+		puts opts
+		exit
+	end
+
+	opts.on("-q", "--sqs queue_name", String, "SQS queue name") do |q|
+		options[:queue] = q
+	end
+	opts.on("-t", "--token hipchat_api_token", String, "HipChat API token") do |t|
+		options[:api] = t
+	end
+	opts.on("-r", "--room hipchat_room_name", String, "HipChat room name") do |r|
+		options[:room] = r
+	end
+end.parse!(ARGV)
+	
+
+
+# get message off queue and publish it to hipchat
+queue = AWS::SQS.new.queues.named(options[:queue])
+hipchat = HipChat::Client.new(options[:api])
+
+#queue.poll(:initial_timeout => false, :idle_timeout => 10) do |message|
+queue.poll do |message|
+	json_message = JSON.parse(message.body)
+	parsed_message = json_message["Message"]
+	events = {}
+	# hash it out
+	parsed_message.split("\n").each do |pair|
+		k,v = pair.split(/=/)
+		events[k] = v
+	end
+	# default hipchat color is yellow, this a bit redundant
+	color = 'yellow'
+	if events["ResourceType"].eql?("'AWS::CloudFormation::Stack'")
+		if ((events["ResourceStatus"].eql?("'CREATE_COMPLETE'")) || (events["ResourceStatus"].eql?("'DELETE_COMPLETE'")))
+			color = 'green'
+		elsif ((events["ResourceStatus"].eql?("'ROLLBACK_IN_PROGRESS'")) || (events["ResourceStatus"].eql?("'ROLLBACK_COMPLETE'")))
+		  color = 'red'
+		end
+		# spam hipchat - your coworkers will love you for it
+  	hipchat[options[:room]].send('CloudFormation', 
+		  "Stack: #{events["StackName"]} - #{events["ResourceStatus"]} - #{events["ResourceStatusReason"]}",
+			:color => color)
+	end
+end

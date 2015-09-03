@@ -1,0 +1,94 @@
+#!/usr/bin/env ruby
+# sg monkey - deletes unloved sgs
+# requires ruby 2.1.X
+# loggin added to stdout
+
+
+require 'rubygems'
+require 'aws-sdk-v1'
+require 'log4r'
+require 'pp'
+require 'optparse'
+
+options = {} 
+opt_parser = OptionParser.new do |opts|
+  opts.banner = "Usage: sg-monkey [options]"
+	# default values
+	options[:region] = "us-west-2"
+	options[:seconds] = 3600
+	opts.on("-r", "--region=REGION", "aws region, us-west-2 is default", String) do |r|
+		options[:region] = r
+	end
+	opts.on("-s", "--seconds=1234", "time to sleep, default is 3600", Integer) do |s|
+		options[:seconds] = s
+	end
+	opts.on_tail('-h', '--help', 'help yo!') do
+		puts opts
+		exit
+	end
+end
+opt_parser.parse!(ARGV)
+
+AWS.config( :region => options[:region])
+
+@logger = Log4r::Logger.new('sg-monkey')
+@logger.outputters << Log4r::Outputter.stdout
+
+#
+# get all security groups and if no ec2 instances are 
+# using the sg delete it
+#
+def delete(sgs_to_delete)
+	ec2 = AWS::EC2.new
+	sgs_to_delete.each do |id|
+		@logger.info("deleting #{id}")
+		begin
+			ec2.security_groups[id].delete
+		rescue AWS::EC2::Errors::DependencyViolation => e
+			@logger.error("unable to delete security group #{id} because of dependancy") 
+		rescue AWS::EC2::Errors::CannotDelete => e
+			@logger.error("cannot delete the default sg")
+		end
+	end
+end
+
+def get_rds_sg()
+	rds = AWS::RDS.new
+	sgs = []
+	rds.db_instances.each do |r|
+		resp = rds.client.describe_db_instances(:db_instance_identifier => r.id)
+		sgs << resp[:db_instances].first[:vpc_security_groups].first[:vpc_security_group_id]
+	end
+	return sgs
+end
+
+def get_unused_sg()
+	ec2 = AWS::EC2.new
+	sgs = []
+	ec2.security_groups.each do |group| 
+		instances = []
+		# lame way to see if group.instances is empty, I couldn't figure 
+		# out a better way to do this.
+		group.instances.each do |instance|
+			instances << instance.id
+		end
+		if instances.empty?
+			sgs << group.id
+		end
+	end
+	return sgs
+end
+
+while true
+	@logger.info('getting security groups used my rds')
+	rds_sgs = get_rds_sg()
+	@logger.info('getting unused security groups')
+	unused_sgs = get_unused_sg()
+	@logger.info('creating list to delete')
+	to_delete = (unused_sgs-rds_sgs).uniq
+	@logger.info('starting delete')
+	delete(to_delete)
+	@logger.info('finished delete')
+	@logger.info("sleeping for #{options[:seconds]} seconds")
+	sleep(options[:seconds])
+end

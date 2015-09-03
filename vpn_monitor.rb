@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # vpn monitor
 # requires ruby 2.1.X
-# TODO 
+# TODO write to hipchat
 
 require 'rubygems'
 require 'aws-sdk'

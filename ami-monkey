@@ -1,0 +1,93 @@
+#!/usr/bin/env ruby
+# ami monkey - deletes unloved amis
+# amis that are not deleted:
+# - amis used by ec2 instances
+# - 5 most recent of a given type, based on name-version_numner
+# - paremt amis - based on parent tag
+# requires ruby 2.1.X
+# loggin added to stdout
+# TODO add logging to a logfile and remove lame while loop 
+
+
+require 'rubygems'
+require 'aws-sdk-v1'
+require 'log4r'
+require 'pp'
+
+AWS.config(:region => 'us-west-2')
+
+@logger = Log4r::Logger.new('ami-monkey')
+@logger.outputters << Log4r::Outputter.stdout
+
+def get_amis_in_use ()
+# get a list of amis that are in use
+	ec2 = AWS::EC2.new
+	ec2_amis = Array.new
+	AWS.memoize {
+		ec2.instances.each do |i|
+			ec2_amis |= [i.image_id]
+		end
+	}
+	return ec2_amis
+end
+
+
+def get_amis_to_delete (ec2_amis)
+	ec2 = AWS::EC2.new
+	parent_amis = Array.new
+	amis_by_name = Hash.new{|hash, key| hash[key] = Hash.new}
+	my_ami_ids = Array.new
+	most_recently_created_amis = Array.new
+
+	AWS.memoize {
+		# get a list of amis we created
+		my_amis = ec2.images.with_owner('self')
+		my_amis.each do |ami|
+			my_ami_ids |= [ami.id]
+			version = ami.name.split("-").last.to_i
+			name = ami.name.gsub(/-build-\d+/, "")
+			# hash of hash - it's legal here.... aminame - version - ami-id
+			amis_by_name[name][version] = ami.id
+			# get list of parent amis
+			if (ami.tags[:parent_ami_version] =~ /ami-*/)
+				parent_amis |=  [ami.tags[:parent_ami_version]]
+			end
+		end
+	}
+	amis_by_name.each_key do |name|
+		# reverse sort based on version and grab the first 5
+		reverse_sort_by_version = amis_by_name[name].sort_by{ |k,v| k}.reverse.first 5
+		reverse_sort_by_version.to_h.each_value do |ami|
+			most_recently_created_amis |= [ami]
+		end
+	end
+	#create the list to delete
+	amis_to_keep = (most_recently_created_amis + ec2_amis + parent_amis).uniq
+	amis_to_delete = (my_ami_ids-amis_to_keep).uniq
+end
+
+def delete (amis_to_delete)
+	ec2 = AWS::EC2.new
+	# delete ami
+	amis_to_delete.each do |ami|
+  	# put in some logging
+  	@logger.info("deleteing #{ami}")
+	begin
+  	ec2.images[ami].deregister
+	rescue AWS::EC2::Errors::InvalidAMIID::Unavailable
+		@logger.error("#{ami} Unavailable")
+	end
+	end
+end
+
+while true
+	ec2_amis = get_amis_in_use()
+	amis_to_delete = get_amis_to_delete(ec2_amis)
+	if !amis_to_delete.empty?
+		@logger.info('starting delete')
+		delete(amis_to_delete)
+		@logger.info('finished delete')
+	end
+	@logger.info('sleeping for 4 hours')
+	sleep(14400)
+end
