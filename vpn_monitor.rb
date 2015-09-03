@@ -1,12 +1,15 @@
 #!/usr/bin/env ruby
 # vpn monitor
 # requires ruby 2.1.X
-# TODO write to hipchat
+# TODO 
 
 require 'rubygems'
 require 'aws-sdk'
 #require 'log4r'
+require 'hipchat'
 require 'pp'
+
+hipchat = HipChat::Client.new("APINUMBER")
 
 regions = ["us-west-2", "ap-southeast-1", "ap-northeast-1"]
 regions.each do |region|
@@ -22,7 +25,11 @@ regions.each do |region|
 						tunnels_up += 1
 					end
 				end
-				puts "In #{region} #{vpn.vpn_connection_id} has #{tunnels_up} tunnel(s) up"
+				if tunnels_up == 0 
+					hipchat["free beer"].send('AWS VPN', "#{region} #{vpn.vpn_connection_id} has no tunnels available", :color => 'red' )
+				else
+					puts "In #{region} #{vpn.vpn_connection_id} has #{tunnels_up} tunnel(s) up"
+				end
 			end
 		end
 	end
