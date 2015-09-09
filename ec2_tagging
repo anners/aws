@@ -1,0 +1,28 @@
+#!/usr/bin/env ruby
+# find untagged instances 
+# requires ruby 2.1.X
+# TODO delete the world
+
+require 'rubygems'
+require 'aws-sdk'
+require 'pp'
+
+puts "instances without a Relay tag"
+regions = ["us-west-2", "ap-southeast-1", "ap-northeast-1"]
+regions.each do |region|
+  puts "region:#{region}"
+	puts
+  client = Aws::EC2::Client.new(region: region)
+	ec2 = Aws::EC2::Resource.new(client: client)
+  ec2.instances.each do |i|
+		if ! tag = i.tags.find { |tag| tag.key == 'Relay' }
+	    puts "instance:#{i.id}"
+			puts "ssh_key:#{i.key_name}"
+			puts "current tags:"
+			i.tags.each do |tag|
+			  puts "\t #{tag.key}:#{tag.value}"
+			end
+			puts
+		end
+  end
+end
